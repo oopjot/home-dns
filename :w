@@ -29,8 +29,7 @@ func getFlags(data []byte) []byte {
     // RD
     flags1 |= byte(0)
 
-    // Second bytes flag will be all 0, as we dont support recursion
-    // or error handling yet :D
+    // Second bytes flag will be all 0, as we dont support recursion yet :D
    
     flags2 := byte(0)
 
@@ -45,7 +44,7 @@ func buildResponse(data []byte) []byte {
     fmt.Printf("Flags: %b\n", flags)
 
     questionCount := binary.LittleEndian.Uint16(data[4:6])
-    fmt.Printf("Question count (int16): %v\n", questionCount)
+    fmt.Printf("Question count (int16): %d\n", questionCount)
 
     return data[:2]
 }
