@@ -3,8 +3,46 @@ package main
 import (
     "net"
     "fmt"
-    "encoding/binary"
 )
+
+type A struct {
+    Name string `json:"name"`
+    Ttl int `json:"ttl"`
+    Value string `json:"value"`
+}
+
+func getQuestionDomain(data []byte) (result string) {
+    isLength := true
+    var length int
+    var currentLabel []byte
+    var labels []string
+
+    for i, b := range(data) {
+        if (b == byte(0)) {
+            break
+        }
+
+        if (isLength) {
+            isLength = false
+            length = int(b) + i
+        } else {
+            currentLabel = append(currentLabel, b)
+            if (i == length) {
+                isLength = true
+                labels = append(labels, string(currentLabel))
+                currentLabel = []byte{}
+            }
+        }
+    }
+
+    fmt.Println(labels)
+
+    for _, label := range(labels) {
+        result += label + "."
+    }
+    
+    return
+}
 
 func getFlags(data []byte) []byte {
     
@@ -43,9 +81,15 @@ func buildResponse(data []byte) []byte {
 
     flags := getFlags(data[2:4])
     fmt.Printf("Flags: %b\n", flags)
+    
+    // QDCOUNT
+    qCount := []byte{0, 1}
+    fmt.Printf("QDCount: %b\n", qCount)
 
-    questionCount := binary.LittleEndian.Uint16(data[4:6])
-    fmt.Printf("Question count (int16): %v\n", questionCount)
+
+    questionDomain := getQuestionDomain(data[12:])
+    fmt.Println(questionDomain)
+    // ANCOUNT
 
     return data[:2]
 }
