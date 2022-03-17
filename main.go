@@ -1,8 +1,12 @@
 package main
 
 import (
-    "net"
-    "fmt"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"net"
+	"os"
 )
 
 type A struct {
@@ -11,11 +15,62 @@ type A struct {
     Value string `json:"value"`
 }
 
-func getQuestionDomain(data []byte) (result string) {
+type NS struct {
+    Host string `json:"host"`
+}
+
+type SOA struct {
+    MName string `json:"mname"`
+    RName string `json:"rname"`
+    Serial string `json:"serial"`
+    Refresh int `json:"refresh"`
+    Retry int `json:"retry"`
+    Expire int `json:"expire"`
+    Minimum int `json:"minimum"`
+}
+
+type Zone struct {
+    Origin string `json:"$origin"`
+    TTL int `json:"$ttl"`
+    SOA SOA `json:"soa"`
+    NS []NS `json:"ns"`
+    A []A `json:"a"`
+}
+
+func getZones() (result []Zone) {
+    files, err := ioutil.ReadDir("./zones")
+    if err != nil {
+        panic("Zone dir not found")
+    }
+
+    for _, file := range(files) {
+        var zone Zone
+        fmt.Println(file.Name())
+        content, err := os.ReadFile("./zones/" + file.Name())
+        if err != nil {
+            fmt.Println(err)
+            panic("Fatalnie")
+        }
+        json.Unmarshal(content, &zone)
+        result = append(result, zone)
+    }
+
+    return
+}
+
+func findZone(origin string, zones []Zone) (Zone, error) {
+    for _, zone := range(zones) {
+        if zone.Origin == origin {
+            return zone, nil
+        }
+    }
+    return Zone{}, errors.New("Zone not found")
+}
+
+func getQuestionDomain(data []byte) (result []string) {
     isLength := true
     var length int
     var currentLabel []byte
-    var labels []string
 
     for i, b := range(data) {
         if (b == byte(0)) {
@@ -29,18 +84,11 @@ func getQuestionDomain(data []byte) (result string) {
             currentLabel = append(currentLabel, b)
             if (i == length) {
                 isLength = true
-                labels = append(labels, string(currentLabel))
+                result = append(result, string(currentLabel))
                 currentLabel = []byte{}
             }
         }
     }
-
-    fmt.Println(labels)
-
-    for _, label := range(labels) {
-        result += label + "."
-    }
-    
     return
 }
 
@@ -75,6 +123,21 @@ func getFlags(data []byte) []byte {
     return []byte{flags1, flags2}
 }
 
+func getAnswers(questionDomain []string) []A {
+    var name string
+    for _, label := range(questionDomain) {
+        name += label
+    }
+    zones := getZones()
+    fmt.Println(zones)
+    zone, err := findZone(name, zones)
+    if err != nil {
+        panic("Zoone not found ")
+    }
+    return zone.A
+}
+
+
 func buildResponse(data []byte) []byte {
     id := data[:2]
     fmt.Printf("ID: %b\n", id)
@@ -89,7 +152,12 @@ func buildResponse(data []byte) []byte {
 
     questionDomain := getQuestionDomain(data[12:])
     fmt.Println(questionDomain)
+    
+    answers := getAnswers(questionDomain)
+    fmt.Println(answers)
     // ANCOUNT
+
+
 
     return data[:2]
 }
