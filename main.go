@@ -1,12 +1,25 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
 	"os"
+	"strconv"
+	"strings"
+)
+
+
+const (
+    AType int = 1 
+    NSType = 2
+    CNameType = 5
+    SOAType = 6
+    MXType = 15
+    TXTType = 16
 )
 
 type A struct {
@@ -45,7 +58,6 @@ func getZones() (result []Zone) {
 
     for _, file := range(files) {
         var zone Zone
-        fmt.Println(file.Name())
         content, err := os.ReadFile("./zones/" + file.Name())
         if err != nil {
             fmt.Println(err)
@@ -67,13 +79,14 @@ func findZone(origin string, zones []Zone) (Zone, error) {
     return Zone{}, errors.New("Zone not found")
 }
 
-func getQuestionDomain(data []byte) (result []string) {
+func getQuestionDomain(data []byte) (result []string, questionType int) {
     isLength := true
     var length int
     var currentLabel []byte
 
     for i, b := range(data) {
         if (b == byte(0)) {
+            length += 2
             break
         }
 
@@ -89,8 +102,12 @@ func getQuestionDomain(data []byte) (result []string) {
             }
         }
     }
+
+    questionTypeBytes := data[length:length + 2]
+    questionType = int(questionTypeBytes[0]) + int(questionTypeBytes[1])
     return
 }
+
 
 func getFlags(data []byte) []byte {
     
@@ -126,10 +143,9 @@ func getFlags(data []byte) []byte {
 func getAnswers(questionDomain []string) []A {
     var name string
     for _, label := range(questionDomain) {
-        name += label
+        name += label + "."
     }
     zones := getZones()
-    fmt.Println(zones)
     zone, err := findZone(name, zones)
     if err != nil {
         panic("Zoone not found ")
@@ -137,29 +153,131 @@ func getAnswers(questionDomain []string) []A {
     return zone.A
 }
 
+func answerDatagram(answer A, questionDomain []string, cache *map[string]byte, responseLength int) (result []byte) {
+    var nameBytes []byte
+    result = append([]byte{192, 12})
+    localCache := *cache
+    // NAME
+    if (answer.Name != "@") {
+        nameLables := strings.Split(answer.Name, ".")
+        nameLables = append(nameLables, questionDomain...)
+        for _, label := range(nameLables) {
 
-func buildResponse(data []byte) []byte {
+            if ref, in := localCache[label]; in {
+                pointer := []byte{192, ref}
+                nameBytes = append(nameBytes, pointer...)
+            } else {
+                localCache[label] = byte(responseLength + len(nameBytes))
+                nameBytes = append(nameBytes, byte(len(label)))
+                for _, c := range(label) {
+                    nameBytes = append(nameBytes, byte(c))
+                }
+            }
+        }
+        nameBytes = append(nameBytes, []byte{0, 0}...)
+    }
+    *cache = localCache
+    result = append(result, nameBytes...)
+
+    // TYPE
+    typeBytes := []byte{0, byte(AType)}
+    result = append(result, typeBytes...)
+
+    // CLASS
+    classBytes := []byte{0, 1}
+    result = append(result, classBytes...)
+
+    // TTL
+    ttlBytes := make([]byte, 4)
+    binary.BigEndian.PutUint32(ttlBytes, uint32(answer.Ttl))
+    result = append(result, ttlBytes...)
+
+    // RDLENGTH
+    lengthBytes := []byte{0, 4}
+    result = append(result, lengthBytes...)
+
+    // RDATA
+    dataBytes := make([]byte, 4)
+    for i, part := range(strings.Split(answer.Value, ".")) {
+        partNum, err := strconv.Atoi(part)
+        if err != nil {
+            panic("Invalid IPv4 address")
+        }
+        dataBytes[i] = byte(partNum)
+    }
+    result = append(result, dataBytes...)
+
+    return
+}
+
+func answersToBytes(answers []A, questionDomain []string, qCount int) (result []byte) { 
+    cache := make(map[string]byte)
+    responseLength := qCount + 12
+
+    for _, answer := range(answers) {
+        answerBytes := answerDatagram(answer, questionDomain, &cache, responseLength)
+        responseLength += len(answerBytes)
+        result = append(result, answerBytes...)
+    }
+    return
+}
+
+func getQuestion(questionDomain []string, questionType int) (result []byte) {
+    for _, label := range(questionDomain) {
+        labelLenght := byte(len(label))
+        labelBytes := []byte{labelLenght}
+        for _, c := range(label) {
+            labelBytes = append(labelBytes, byte(c))
+        }
+        result = append(result, labelBytes...)
+    }
+    result = append(result, byte(0))
+
+    // QTYPE
+    qType := []byte{0, byte(questionType)}
+    result = append(result, qType...)
+
+    // QCLASS
+    qClass := []byte{0, 1}
+    result = append(result, qClass...)
+    return
+}
+
+
+
+func buildResponse(data []byte) (result []byte) {
     id := data[:2]
-    fmt.Printf("ID: %b\n", id)
+    result = append(result, id...)
 
     flags := getFlags(data[2:4])
-    fmt.Printf("Flags: %b\n", flags)
+    result = append(result, flags...)
     
     // QDCOUNT
     qCount := []byte{0, 1}
-    fmt.Printf("QDCount: %b\n", qCount)
+    result = append(result, qCount...)
 
-
-    questionDomain := getQuestionDomain(data[12:])
-    fmt.Println(questionDomain)
-    
-    answers := getAnswers(questionDomain)
-    fmt.Println(answers)
     // ANCOUNT
+    questionDomain, questionType := getQuestionDomain(data[12:])
+    records := getAnswers(questionDomain)
+    anCount := make([]byte, 2)
+    binary.BigEndian.PutUint16(anCount, uint16(len(records)))
+    result = append(result, anCount...)
 
+    nsCount := []byte{0, 0}
+    result = append(result, nsCount...)
 
+    arCount := []byte{0, 0}
+    result = append(result, arCount...)
 
-    return data[:2]
+    question := getQuestion(questionDomain, questionType)
+    result = append(result, question...)
+    
+    if (questionType == AType) {
+        answers := answersToBytes(records, questionDomain, 1)
+        result = append(result, answers...)
+    }
+
+    return
 }
 
 func main() {
@@ -184,8 +302,6 @@ func main() {
 
         data := message[:rlen]
         
-        fmt.Printf("Query: %b\n", data)
-
         conn.WriteToUDP(buildResponse(data), remote)
     }
 }
