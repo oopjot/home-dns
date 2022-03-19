@@ -153,29 +153,36 @@ func getAnswers(questionDomain []string) []A {
     return zone.A
 }
 
-func answerDatagram(answer A, questionDomain []string, cache *map[string]byte, responseLength int) (result []byte) {
+func answerDatagram(answer A, cache *map[string]byte, responseLength int) (result []byte) {
     var nameBytes []byte
-    result = append([]byte{192, 12})
+    var endsWithPointer bool
     localCache := *cache
+
     // NAME
-    if (answer.Name != "@") {
+    if (answer.Name == "@") {
+        result = append([]byte{192, 12})
+    } else {
         nameLables := strings.Split(answer.Name, ".")
-        nameLables = append(nameLables, questionDomain...)
         for _, label := range(nameLables) {
 
             if ref, in := localCache[label]; in {
                 pointer := []byte{192, ref}
                 nameBytes = append(nameBytes, pointer...)
+                endsWithPointer = true
             } else {
                 localCache[label] = byte(responseLength + len(nameBytes))
                 nameBytes = append(nameBytes, byte(len(label)))
                 for _, c := range(label) {
                     nameBytes = append(nameBytes, byte(c))
                 }
+                endsWithPointer = false
             }
         }
-        nameBytes = append(nameBytes, []byte{0, 0}...)
+        if (!endsWithPointer) {
+            nameBytes = append(nameBytes, []byte{0}...)
+        }
     }
+    
     *cache = localCache
     result = append(result, nameBytes...)
 
@@ -210,12 +217,11 @@ func answerDatagram(answer A, questionDomain []string, cache *map[string]byte, r
     return
 }
 
-func answersToBytes(answers []A, questionDomain []string, qCount int) (result []byte) { 
+func answersToBytes(answers []A, responseLength int) (result []byte) { 
     cache := make(map[string]byte)
-    responseLength := qCount + 12
 
     for _, answer := range(answers) {
-        answerBytes := answerDatagram(answer, questionDomain, &cache, responseLength)
+        answerBytes := answerDatagram(answer, &cache, responseLength)
         responseLength += len(answerBytes)
         result = append(result, answerBytes...)
     }
@@ -273,7 +279,7 @@ func buildResponse(data []byte) (result []byte) {
     result = append(result, question...)
     
     if (questionType == AType) {
-        answers := answersToBytes(records, questionDomain, 1)
+        answers := answersToBytes(records, len(result))
         result = append(result, answers...)
     }
 
